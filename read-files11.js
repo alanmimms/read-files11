@@ -330,9 +330,10 @@ H.DVTY= 000012   	I.FVER= 000010   	Q.IOPL= 000014   	W.RTRV  000012
 `.split(/[\t\n]/)
       .reduce((cur, e) => {
         e = e.trimStart();
-        let [id, val] = [e.slice(0, 6).replace(/\./g, '_').trim(), parseInt(e.slice(8, 6), 8)];
+        const [id, val] = [e.slice(0, 6).replace(/\./g, '_').trim(), parseInt(e.slice(8, 14), 8)];
+        if (id && Number.isInteger(val)) cur[id] = val;
+        return cur;
       }, {});
-
 
 const indexFID = [1, 1, 0];
 const mfdFID = [4, 4, 0];
@@ -350,10 +351,44 @@ const r50ToASCII = ` ABCDEFGHIJKLMNOPQRSTUVWXYZ$.%0123456789`;
 // block in the Index File? 0x1100 isn't even a multiple of 512.
 
 const buf = fs.readFileSync(process.argv[2]);
+const homeBlock = buf.slice(0x1100); // Dunno why this offset
+
+console.log(`Volume Home Block:
+Index File Bitmap Size:            ${w16(homeBlock, C.H_IBSZ)}
+Index File BitMap LBN:             0x${w32(homeBlock, C.H_IBLB).toString(16)}
+Maximum Number of Files:           ${w16(homeBlock, C.H_FMAX)}
+Storage Bitmap Cluster Factor:     ${w16(homeBlock, C.H_SBCL)}
+Disk Device Type:                  ${w16(homeBlock, C.H_DVTY)}
+Volume Structure Level:            0o${w16(homeBlock, C.H_VLEV).toString(8)}
+Volume Name:                       ${homeBlock.toString('UTF-8', C.H_VNAM, C.H_VNAM + 12)}
+Owner UIC:                         [${uic(homeBlock, C.H_VOWN)}]
+Volume Characteristics:            0x${w16(homeBlock, C.H_VCHA).toString(16)}
+First Checksum:                    0x${w16(homeBlock, C.H_CHK1).toString(16)}
+Volume Creation Date:              ${homeBlock.toString('UTF-8', C.H_VDAT, C.H_VDAT + 14)}
+Volume Name:                       ${homeBlock.toString('UTF-8', C.H_INDN, C.H_INDN + 12)}
+Second Checksum:                   0x${w16(homeBlock, C.H_CHK2).toString(16)}
+`);
 
 
-console.log(`R50 [1683,6606]=${fromR50([1683, 6606])}`);
-console.log(`R50 for 'ABCDEF=${toR50('ABCDEF')}`);
+if ('testing' == 'not-testing') {
+  console.log(`R50 [1683,6606]=${fromR50([1683, 6606])}`);
+  console.log(`R50 for 'ABCDEF=${toR50('ABCDEF')}`);
+}
+
+
+function w16(buf, offset) {
+  return buf.readUInt16LE(offset);
+}
+
+
+function w32(buf, offset) {
+  return (buf.readUInt16LE(offset) << 16) | buf.readUInt16LE(offset+2);
+}
+
+
+function uic(buf, offset) {
+  return [buf.readUInt8(offset+1), buf.readUInt8(offset)];
+}
 
 
 function r50Byte(w, pos) {
