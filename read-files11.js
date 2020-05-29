@@ -267,13 +267,22 @@ const fs = require('fs');
 
 
 // Define the constants we use in the FILES11 system by literally
-// parsing the SYMBOL TABLE DUMP from MOUNT.LST. I substitute "_" in
-// the symbol names for "." so I can refer to C.H_PROJ in JavaScript.
-// I don't care about any symbols containing "$" so I don't bother
-// substituting it with anything.
+// parsing the SYMBOL TABLE DUMP from MOUNT.LST. I don't care about
+// any symbols containing "$" so I don't bother substituting it with
+// anything.
+//
+// If an element name is of the form x.yyy and we have a prefixes
+// entry named `x` then add `yyy` to that prefix object. When this is
+// done we can refer to x.yyy in our JavaScript code and it will "just
+// work".
 //
 // I have made no attempt to reduce the list. Items here that I don't
 // need are simply never used.
+const F = {};
+const H = {};
+const I = {};
+const S = {};
+const prefixes = {F, H, I, S};
 const C = `\
 AC.DLK= 000002   	H.FCHA= 000014   	I.IOSB  000016   	Q.IOPR= 000007   	W.STD   000004
 AC.LCK= 000001   	H.FIEX= 000055   	I.LGTH  000040   	Q.IOSB= 000010   	W.VBN   000006
@@ -330,8 +339,22 @@ H.DVTY= 000012   	I.FVER= 000010   	Q.IOPL= 000014   	W.RTRV  000012
 `.split(/[\t\n]/)
       .reduce((cur, e) => {
         e = e.trimStart();
-        const [id, val] = [e.slice(0, 6).replace(/\./g, '_').trim(), parseInt(e.slice(8, 14), 8)];
-        if (id && Number.isInteger(val)) cur[id] = val;
+        const [id, val] = [e.slice(0, 6).trim(), parseInt(e.slice(8, 14), 8)];
+
+        if (id && Number.isInteger(val)) {
+          cur[id] = val;
+          const dotPos = id.indexOf('.');
+
+          if (dotPos > 0) {
+            const prefix = id.slice(0, dotPos);
+            const postfix = id.slice(dotPos + 1);
+
+            if (prefix && prefixes[prefix] && postfix) {
+              prefixes[prefix][postfix] = val;
+            }
+          }
+        }
+
         return cur;
       }, {});
 
@@ -351,28 +374,67 @@ const r50ToASCII = ` ABCDEFGHIJKLMNOPQRSTUVWXYZ$.%0123456789`;
 // block in the Index File? 0x1100 isn't even a multiple of 512.
 
 const buf = fs.readFileSync(process.argv[2]);
-const homeBlock = buf.slice(0x1100); // Dunno why this offset
 
-console.log(`Volume Home Block:
-Index File Bitmap Size:            ${w16(homeBlock, C.H_IBSZ)}
-Index File BitMap LBN:             0x${w32(homeBlock, C.H_IBLB).toString(16)}
-Maximum Number of Files:           ${w16(homeBlock, C.H_FMAX)}
-Storage Bitmap Cluster Factor:     ${w16(homeBlock, C.H_SBCL)}
-Disk Device Type:                  ${w16(homeBlock, C.H_DVTY)}
-Volume Structure Level:            0o${w16(homeBlock, C.H_VLEV).toString(8)}
-Volume Name:                       ${homeBlock.toString('UTF-8', C.H_VNAM, C.H_VNAM + 12)}
-Owner UIC:                         [${uic(homeBlock, C.H_VOWN)}]
-Volume Characteristics:            0x${w16(homeBlock, C.H_VCHA).toString(16)}
-First Checksum:                    0x${w16(homeBlock, C.H_CHK1).toString(16)}
-Volume Creation Date:              ${homeBlock.toString('UTF-8', C.H_VDAT, C.H_VDAT + 14)}
-Volume Name:                       ${homeBlock.toString('UTF-8', C.H_INDN, C.H_INDN + 12)}
-Second Checksum:                   0x${w16(homeBlock, C.H_CHK2).toString(16)}
+const homeBlockOffset = 0x1100; // Dunno why this offset;
+const homeBlock = buf.slice(homeBlockOffset);
+
+const indexBitmapOffset = homeBlockOffset + 0o1000;
+const indexBitmap = buf.slice(indexBitmapOffset);
+
+const fileHeadersOffset = indexBitmapOffset + 0o1000 * w16(homeBlock, H.IBSZ);
+const fileHeaders = buf.slice(fileHeadersOffset);
+
+console.log(`
+Volume Home Block:
+Index File Bitmap Size:            ${w16(homeBlock, H.IBSZ)}
+Index File BitMap LBN:             0x${w32(homeBlock, H.IBLB).toString(16)}
+Maximum Number of Files:           ${w16(homeBlock, H.FMAX)}
+Storage Bitmap Cluster Factor:     ${w16(homeBlock, H.SBCL)}
+Disk Device Type:                  ${w16(homeBlock, H.DVTY)}
+Volume Structure Level:            0o${w16(homeBlock, H.VLEV).toString(8)}
+Volume Name:                       ${homeBlock.toString('UTF-8', H.VNAM, H.VNAM + 12)}
+Owner UIC:                         [${uic(homeBlock, H.VOWN)}]
+Volume Characteristics:            0x${w16(homeBlock, H.VCHA).toString(16)}
+First Checksum:                    0x${w16(homeBlock, H.CHK1).toString(16)}
+Volume Creation Date:              ${homeBlock.toString('UTF-8', H.VDAT, H.VDAT + 14)}
+Volume Name:                       ${homeBlock.toString('UTF-8', H.INDN, H.INDN + 12)}
+Second Checksum:                   0x${w16(homeBlock, H.CHK2).toString(16)}
+`);
+
+console.log(`
+IndexBitmapOffset:                 0x${indexBitmapOffset.toString(16)}
+FileHeadersOffset:                 0x${fileHeadersOffset.toString(16)}
+`);
+
+// File Headers offsets from on-disk structure
+H.IDOF = w8(fileHeaders, H.IDOF);
+H.MPOF = w8(fileHeaders, H.MPOF);
+
+console.log(`
+File Headers:
+Ident Area Offset:        0x${(w8(fileHeaders, H.IDOF)*2).toString(16)} bytes
+Map Area Offset:          0x${(w8(fileHeaders, H.MPOF)*2).toString(16)} bytes
+File Number:              ${w16(fileHeaders, H.FNUM)}
+File Sequence Number:     ${w16(fileHeaders, H.FSEQ)}
+File Structure Level:     0o${w16(fileHeaders, H.FLEV).toString(8)}
+File Owner:               [${uic(fileHeaders, H.FOWN)}]
+`);
+
+console.log(`
+File Name:                ${fromR50(w16x3(fileHeaders, H.HDHD + I.FNAM))}
+File Type:                ${fromR50([w16(fileHeaders, H.HDHD + I.FTYP)])}
+File Revision Date:       ${fileHeaders.toString('UTF-8', H.HDHD + I.RVDT, H.HDHD + I.RVDT + 7)}
 `);
 
 
 if ('testing' == 'not-testing') {
   console.log(`R50 [1683,6606]=${fromR50([1683, 6606])}`);
   console.log(`R50 for 'ABCDEF=${toR50('ABCDEF')}`);
+}
+
+
+function w8(buf, offset) {
+  return buf.readUInt8(offset);
 }
 
 
@@ -388,6 +450,12 @@ function w32(buf, offset) {
 
 function uic(buf, offset) {
   return [buf.readUInt8(offset+1), buf.readUInt8(offset)];
+}
+
+
+// Return a three word array of w16 from offset
+function w16x3(buf, offset) {
+  return [buf.readUInt16LE(offset+0), buf.readUInt16LE(offset+2), buf.readUInt16LE(offset+4)];
 }
 
 
