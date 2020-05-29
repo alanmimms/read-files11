@@ -8,6 +8,7 @@
 // created in the current working directory and a verbose listing of
 // these is is displayed on the console while the program does its
 // thing.
+const _ = require('lodash');
 const fs = require('fs');
 
 /*
@@ -384,6 +385,26 @@ const indexBitmap = buf.slice(indexBitmapOffset);
 const fileHeadersOffset = indexBitmapOffset + 0o1000 * w16(homeBlock, H.IBSZ);
 const fileHeaders = buf.slice(fileHeadersOffset);
 
+console.log(`buf.length=0x${buf.length.toString(16)}`);
+
+const bpl = 16;
+
+const dump = _.range(0, 65536, bpl)
+      .map(off => {
+        return `${off.toString(16).padStart(6, '0')}: ` +
+          _.range(off, off+bpl, 2)
+          .map(bo => buf.readUInt16LE(bo).toString(16).padStart(4, '0'))
+          .join(' ') +
+          ` '${fromR50(_.range(off, off+bpl, 2).map(bo => buf.readUInt16LE(bo)), false)}'` +
+          ` "` + _.range(off, off+bpl).map(bo => {
+            const byte = buf.readUInt8(bo);
+            return _.inRange(byte, 32, 128) ? String.fromCharCode(byte) : '.';
+          }).join('') + `"`;
+      })
+      .join('\n');
+
+fs.writeFileSync(process.argv[2] + '.hexdump', dump);
+
 console.log(`
 Volume Home Block:
 Index File Bitmap Size:            ${w16(homeBlock, H.IBSZ)}
@@ -469,8 +490,9 @@ function r50Byte(w, pos) {
 // From the specified array of little-endian PDP-11 words in
 // RADIX-50 format (three characters per word) into an ASCII string
 // and return it.
-function fromR50(words) {
-  return words.reduce((cur, w) => cur + r50Byte(w, 2) + r50Byte(w, 1) + r50Byte(w, 0), "").trim();
+function fromR50(words, trim = true) {
+  const s = words.reduce((cur, w) => cur + r50Byte(w, 2) + r50Byte(w, 1) + r50Byte(w, 0), "");
+  return trim ? s.trim() : s;
 }
 
 
