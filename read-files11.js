@@ -413,12 +413,12 @@ Maximum Number of Files:           ${w16(homeBlock, H.FMAX)}
 Storage Bitmap Cluster Factor:     ${w16(homeBlock, H.SBCL)}
 Disk Device Type:                  ${w16(homeBlock, H.DVTY)}
 Volume Structure Level:            0o${w16(homeBlock, H.VLEV).toString(8)}
-Volume Name:                       ${homeBlock.toString('UTF-8', H.VNAM, H.VNAM + 12)}
+Volume Name:                       ${homeBlock.toString('latin1', H.VNAM, H.VNAM + 12)}
 Owner UIC:                         [${uic(homeBlock, H.VOWN)}]
 Volume Characteristics:            0x${w16(homeBlock, H.VCHA).toString(16)}
-First Checksum:                    0x${w16(homeBlock, H.CHK1).toString(16)}
-Volume Creation Date:              ${homeBlock.toString('UTF-8', H.VDAT, H.VDAT + 14)}
-Volume Name:                       ${homeBlock.toString('UTF-8', H.INDN, H.INDN + 12)}
+First Checksum:                    0x${w16(homeBlock, H.CHK1).toString(16)} off=0x${Number(homeBlockOffset + H.CHK1).toString(16)}
+Volume Creation Date:              ${homeBlock.toString('latin1', H.VDAT, H.VDAT + 14)}
+Volume Owner:                      ${homeBlock.toString('latin1', H.INDO, H.INDO + 12)} off=0x${Number(homeBlockOffset + H.INDO).toString(16)}
 Second Checksum:                   0x${w16(homeBlock, H.CHK2).toString(16)}
 `);
 
@@ -445,7 +445,7 @@ File Owner:               [${uic(fileHeaders, H.FOWN)}]
 console.log(`
 File Name:                ${fromR50(w16x3(fileHeaders, H.HDHD + I.FNAM))}
 File Type:                ${fromR50([w16(fileHeaders, H.HDHD + I.FTYP)])}
-File Revision Date:       ${fileHeaders.toString('UTF-8', H.HDHD + I.RVDT, H.HDHD + I.RVDT + 7)}
+File Revision Date:       ${fileHeaders.toString('latin1', H.HDHD + I.RVDT, H.HDHD + I.RVDT + 7)}
 `);
 */
 
