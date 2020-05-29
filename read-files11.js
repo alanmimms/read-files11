@@ -1,13 +1,19 @@
 #!/usr/bin/env node
 'use strict';
-// This reads and extracts the contents of an RSX-20F (FILES11)
-// filesystem volume -- for example, a KL10 CPU's front-end RSX-20F
-// floppy disk image file. The pathname of the disk image whose
-// contents is to be extracted is named as the sole command line
+// This reads and extracts the contents of an RSX-20F (FILES11) RX-01
+// MEDIA ONLY filesystem volume -- for example, a KL10 CPU's front-end
+// RSX-20F RX01 floppy disk image file. The pathname of the disk image
+// whose contents is to be extracted is named as the sole command line
 // parameter. The extracted tree of directories and their files are
 // created in the current working directory and a verbose listing of
 // these is is displayed on the console while the program does its
 // thing.
+//
+// The reason this will only work on RX01 media image files is that
+// this implements the RX01 logical block to physical sector mapping
+// that is, well, _strange_ for RX01. This was done for good
+// performance reasons in the original RX01 design, but here in the
+// 21st Century it's wierd as fuck.
 const _ = require('lodash');
 const fs = require('fs');
 
@@ -364,19 +370,40 @@ const mfdFID = [4, 4, 0];
 
 const r50ToASCII = ` ABCDEFGHIJKLMNOPQRSTUVWXYZ$.%0123456789`;
 
-// NOTES:
+// Edited for clarity from
+// (http://gunkies.org/wiki/RX0x_floppy_drive)[RX0x floppy drive - Computer History Wiki].
 //
-// "DECFILE11A" is at 0x1470=5232. in the first raw disk image. this
-// is H.INDF=0o760=496. This probably means there are padding bytes at
-// start of image or at start of each block.
+// RX01 DRIVE
+//     Total Surfaces:      1
+//     Tracks Per Surface: 77 (76 used)
+//     Sectors Per Track:  26
 //
-// At offset 0x1100 is the start of the Home Block. How is this
-// possible if blocks are 512 (0x200) and the Home Block is the second
-// block in the Index File? 0x1100 isn't even a multiple of 512.
+// DEC normally left track 0 unused (although it was not used to hold
+// bootstraps). This was because the standard IBM format reserved
+// track 0 for special purposes.
+//
+// They also used an idiosyncratic layout of the 'logical' sectors on
+// a floppy, intended to maximize the performance: the first logical
+// sector of each data track was offset by six 'physical' sectors from
+// the 'first' sector of the preceding track, and sequential logical
+// sectors were on alternating physical sectors.
+const nTracks = 76;             // Ignore track #0
+const sectorsPerTrack = 26;
+const sectorSize = 128;
+const blockSize = 512;
+const sectorsPerBlock = blockSize / sectorSize;
+const trackSize = sectorSize * sectorsPerTrack;
+const nBlocks = nTracks * trackSize / blockSize;
 
-const buf = fs.readFileSync(process.argv[2]);
+// Read the RX01 media image in so we can swizzle it.
+const rawBuf = fs.readFileSync(process.argv[2]);
 
-const homeBlockOffset = 0x1100; // Dunno why this offset;
+// Convert rawBuf RX01 media sector-mapped the RX01 way to buf so we
+// can view it as a sequence of logical 512B blocks as required by
+// FILES-11 structure.
+const buf = convertToLogicalBlocks(rawBuf);
+
+const homeBlockOffset = 0x800;
 const homeBlock = buf.slice(homeBlockOffset);
 
 const indexBitmapOffset = homeBlockOffset + 0o1000;
@@ -413,12 +440,12 @@ Maximum Number of Files:           ${w16(homeBlock, H.FMAX)}
 Storage Bitmap Cluster Factor:     ${w16(homeBlock, H.SBCL)}
 Disk Device Type:                  ${w16(homeBlock, H.DVTY)}
 Volume Structure Level:            0o${w16(homeBlock, H.VLEV).toString(8)}
-Volume Name:                       ${homeBlock.toString('latin1', H.VNAM, H.VNAM + 12)}
+Volume Name:                       ${str(homeBlock, H.VNAM, 12)}
 Owner UIC:                         [${uic(homeBlock, H.VOWN)}]
 Volume Characteristics:            0x${w16(homeBlock, H.VCHA).toString(16)}
 First Checksum:                    0x${w16(homeBlock, H.CHK1).toString(16)} off=0x${Number(homeBlockOffset + H.CHK1).toString(16)}
-Volume Creation Date:              ${homeBlock.toString('latin1', H.VDAT, H.VDAT + 14)}
-Volume Owner:                      ${homeBlock.toString('latin1', H.INDO, H.INDO + 12)} off=0x${Number(homeBlockOffset + H.INDO).toString(16)}
+Volume Creation Date:              ${str(homeBlock, H.VDAT, 14)}
+Volume Owner:                      ${str(homeBlock, H.INDO, 12)} off=0x${Number(homeBlockOffset + H.INDO).toString(16)}
 Second Checksum:                   0x${w16(homeBlock, H.CHK2).toString(16)}
 `);
 
@@ -445,15 +472,19 @@ File Owner:               [${uic(fileHeaders, H.FOWN)}]
 console.log(`
 File Name:                ${fromR50(w16x3(fileHeaders, H.HDHD + I.FNAM))}
 File Type:                ${fromR50([w16(fileHeaders, H.HDHD + I.FTYP)])}
-File Revision Date:       ${fileHeaders.toString('latin1', H.HDHD + I.RVDT, H.HDHD + I.RVDT + 7)}
+File Revision Date:       ${str(fileHeaders, H.HDHD + I.RVDT, 7)}
 `);
 */
 
 if ('testing' == 'not-testing') {
   console.log(`R50 [1683,6606]=${fromR50([1683, 6606])}`);
-  console.log(`R50 for 'ABCDEF=${toR50('ABCDEF')}`);
+  console.log(`R50 for 'ABCDEF=${toR50('ABCDEF')}'`);
 }
 
+
+function str(buf, offset, len) {
+  return buf.toString('latin1', offset, offset + len);
+}
 
 function w8(buf, offset) {
   return buf.readUInt8(offset);
@@ -508,3 +539,64 @@ function toR50(str) {
          r50ToASCII.indexOf(s.charAt(1)) * 40 +
          r50ToASCII.indexOf(s.charAt(2)));
 }
+
+
+// Copy the Buffer instance `rx01RawBuf` from the physical media mapping to
+// logical block mapping required by FILES-11.
+function convertToLogicalBlocks(rx01RawBuf) {
+  const logical = Buffer.allocUnsafe((nTracks + 1) * trackSize);
+
+  for (let b = 0; b < nBlocks; ++b) {
+    const bOffset = b * blockSize;
+
+    for (let sectorN = 0; sectorN < sectorsPerBlock; ++sectorN) {
+      const logicalSector = b * sectorsPerBlock + sectorN;
+      const [track, sector] = logicalToRX01Physical(logicalSector);
+      const srcOffset = track * trackSize + sector * sectorSize;
+      console.log(`b=${b} sectorN=${sectorN}, logicalSector=${logicalSector}, track=${track}, sector=${sector}, srcOffset=${srcOffset}`);
+      rx01RawBuf.copy(logical, bOffset + sectorN * sectorSize, srcOffset, srcOffset + sectorSize);
+    }
+  }
+
+  return logical;
+}
+
+
+// Translate a logical sector number `s` into physical track and
+// sector numbers.
+//
+// This fragment of C code implements the logical to physical
+// track/sector translation:
+//
+// ```
+//    #define NSECT   26
+//
+//    int track = blkno / NSECT;
+//
+//    // Alternate sectors within track using modulo
+//    int i = (blkno % NSECT) * 2;
+//    if (i >= NSECT) ++i;
+//
+//    // 6-sector offset and 1-origin sector numbering 1..26
+//    int sector = (i + 6 * track) % NSECT + 1;
+//
+//    // Skip track 0 entirely, so 1-origin track numbering 1..76
+//    ++track;
+// ```
+function logicalToRX01Physical(s) {
+  let track = Math.floor(s / sectorsPerTrack);
+
+  // Alternate sectors within track using modulo
+  let sector = s % sectorsPerTrack * 2;
+  if (sector >= sectorsPerTrack) ++sector;
+
+  // 6-sector offset and 1-origin sector numbering 1..26
+  sector = (sector + 6*track) % sectorsPerTrack + 1;
+
+  ++track;                      // Skip track #0 entirely
+  return [track, sector];
+}
+
+// RSX11mplus disk:                RX01 floppy image
+// 23E volume create date          113E
+// 3E4 volume owner                1464
