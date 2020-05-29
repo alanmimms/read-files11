@@ -389,7 +389,7 @@ console.log(`buf.length=0x${buf.length.toString(16)}`);
 
 const bpl = 16;
 
-const dump = _.range(0, 65536, bpl)
+const dump = _.range(0, buf.length, bpl)
       .map(off => {
         return `${off.toString(16).padStart(6, '0')}: ` +
           _.range(off, off+bpl, 2)
@@ -441,12 +441,13 @@ File Structure Level:     0o${w16(fileHeaders, H.FLEV).toString(8)}
 File Owner:               [${uic(fileHeaders, H.FOWN)}]
 `);
 
+/*
 console.log(`
 File Name:                ${fromR50(w16x3(fileHeaders, H.HDHD + I.FNAM))}
 File Type:                ${fromR50([w16(fileHeaders, H.HDHD + I.FTYP)])}
 File Revision Date:       ${fileHeaders.toString('UTF-8', H.HDHD + I.RVDT, H.HDHD + I.RVDT + 7)}
 `);
-
+*/
 
 if ('testing' == 'not-testing') {
   console.log(`R50 [1683,6606]=${fromR50([1683, 6606])}`);
